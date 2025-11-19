@@ -1,72 +1,132 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { Word, Difficulty } from '@/types';
-import { scoreSentence } from '@/lib/scoring';
+import { useState, useEffect, useCallback } from "react";
+import { Word, Difficulty } from "@/types";
 
 export default function Home() {
     const [currentWord, setCurrentWord] = useState<Word | null>(null);
-    const [sentence, setSentence] = useState<string>('');
-    const [score, setScore] = useState<number>(0);
-    const [feedbackColor, setFeedbackColor] = useState<string>('text-gray-700');
-    const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
+    const [sentence, setSentence] = useState("");
+    const [score, setScore] = useState<number | null>(null);
+    const [feedback, setFeedback] = useState("");
+    const [corrected, setCorrected] = useState("");
+    const [isSubmitted, setIsSubmitted] = useState(false);
 
+    // -----------------------
+    // Fetch Random Word
+    // -----------------------
     const getRandomWord = useCallback(async () => {
-        const response = await fetch('http://localhost:8000/api/word');
-        const data = await response.json();
+        try {
+            const res = await fetch("http://localhost:8000/api/word");
+            const data = await res.json();
+            setCurrentWord(data);
 
-        setCurrentWord(data);
-        setSentence('');
-        setScore(0);
-        setFeedbackColor('text-gray-700');
-        setIsSubmitted(false);
+            // reset UI
+            setSentence("");
+            setScore(null);
+            setFeedback("");
+            setCorrected("");
+            setIsSubmitted(false);
+        } catch (err) {
+            console.error("Error fetching random word:", err);
+        }
     }, []);
-
 
     useEffect(() => {
         getRandomWord();
     }, [getRandomWord]);
 
+    // -----------------------
+    // Handle typing
+    // -----------------------
     const handleSentenceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setSentence(e.target.value);
-        // Reset score and feedback if user starts typing again after submission
+
         if (isSubmitted) {
-            setScore(0);
-            setFeedbackColor('text-gray-700');
             setIsSubmitted(false);
+            setScore(null);
+            setFeedback("");
+            setCorrected("");
         }
     };
 
-    const handleSubmitSentence = () => {
-        if (currentWord) {
-            const newScore = scoreSentence(currentWord.word, sentence);
-            setScore(newScore);
-
-            if (newScore >= 8.0) {
-                setFeedbackColor('text-success');
-            } else if (newScore >= 6.0) {
-                setFeedbackColor('text-warning');
-            } else {
-                setFeedbackColor('text-danger');
-            }
-
-            const history = JSON.parse(localStorage.getItem('wordHistory') || '[]');
-            history.push({
-                word: currentWord.word,
+    // -----------------------
+    // Validate Sentence API
+    // -----------------------
+    const validateSentence = async () => {
+        const res = await fetch("http://localhost:8000/api/validate-sentence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                word_id: currentWord?.id,
                 sentence: sentence,
-                score: newScore,
-                difficulty: currentWord.difficulty_level,
-                timestamp: new Date().toISOString(),
-            });
-            localStorage.setItem('wordHistory', JSON.stringify(history));
+            }),
+        });
+
+        if (!res.ok) throw new Error("Validation failed");
+
+        return await res.json();
+    };
+
+    // -----------------------
+    // Save to Database API
+    // -----------------------
+    const savePracticeSession = async (validationResult: any) => {
+        await fetch("http://localhost:8000/api/practice-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                word_id: currentWord?.id,
+                user_sentence: sentence,
+                score: validationResult.score,
+                feedback: validationResult.suggestion,
+                corrected_sentence: validationResult.corrected_sentence,
+            }),
+        });
+    };
+
+    // -----------------------
+    // Submit Sentence
+    // -----------------------
+    const handleSubmitSentence = async () => {
+        if (!currentWord) return;
+
+        try {
+            const result = await validateSentence();
+
+            setScore(result.score);
+            setFeedback(result.suggestion);
+            setCorrected(result.corrected_sentence);
             setIsSubmitted(true);
+
+            // Save to DB
+            await savePracticeSession(result);
+
+        } catch (err) {
+            console.error("Error submitting sentence:", err);
         }
     };
 
+    // -----------------------
+    // Retry
+    // -----------------------
+    const handleRetry = () => {
+        setSentence("");
+        setScore(null);
+        setFeedback("");
+        setCorrected("");
+        setIsSubmitted(false);
+    };
+
+    // -----------------------
+    // Next Word
+    // -----------------------
     const handleNextWord = () => {
         getRandomWord();
     };
 
+    // -----------------------
+    // Difficulty Color Badge
+    // -----------------------
     const getDifficultyColor = (difficulty: Difficulty) => {
         switch (difficulty) {
             case "Beginner":
@@ -81,56 +141,94 @@ export default function Home() {
     };
 
     if (!currentWord) {
-        return <div className="flex justify-center items-center h-screen">Loading word...</div>;
+        return (
+            <div className="flex justify-center items-center h-screen">
+                Loading word...
+            </div>
+        );
     }
 
     return (
         <div className="container mx-auto p-4 max-w-3xl">
-            <h1 className="text-4xl md:text-5xl font-extrabold text-center mb-8 text-gray-800 leading-tight">Word Challenge</h1>
+            <h1 className="text-4xl font-extrabold text-center mb-8 text-gray-800">
+                Word Challenge
+            </h1>
 
-            <div className="bg-white p-8 rounded-2xl shadow-xl mb-6 border border-gray-100 transform hover:scale-105 transition-transform duration-300 ease-in-out">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-                    <h2 className="text-3xl md:text-4xl font-bold text-primary mb-2 sm:mb-0">{currentWord.word}</h2>
-                    <span className={`px-4 py-1 rounded-full text-sm font-semibold ${getDifficultyColor(currentWord.difficulty_level)} shadow-md`}>
+            <div className="bg-white p-8 rounded-2xl shadow-xl mb-6 border border-gray-100">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-3xl font-bold text-primary">
+                        {currentWord.word}
+                    </h2>
+                    <span
+                        className={`px-4 py-1 rounded-full text-sm font-semibold ${getDifficultyColor(
+                            currentWord.difficulty_level
+                        )}`}
+                    >
                         {currentWord.difficulty_level}
                     </span>
                 </div>
-                <p className="text-lg md:text-xl text-gray-700 mb-6 leading-relaxed">{currentWord.definition}</p>
 
-                <div className="mb-6">
-                    <label htmlFor="sentence" className="block text-base font-medium text-gray-700 mb-2">Your Sentence:</label>
-                    <textarea
-                        id="sentence"
-                        className="w-full p-4 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary transition duration-200 ease-in-out resize-y text-lg"
-                        rows={4}
-                        placeholder="Type your sentence here..."
-                        value={sentence}
-                        onChange={handleSentenceChange}
-                        disabled={isSubmitted}
-                    ></textarea>
-                </div>
+                <p className="text-lg text-gray-700 mb-6">
+                    {currentWord.definition}
+                </p>
 
-                <div className="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0">
-                    <p className="text-2xl font-bold">Score: <span className={`${feedbackColor} transition-colors duration-300`}>{score.toFixed(1)}</span></p>
-                    <div className="flex space-x-3">
+                {/* Sentence Input */}
+                <textarea
+                    className="w-full p-4 border border-gray-300 rounded-lg text-lg"
+                    rows={4}
+                    placeholder="Type your sentence..."
+                    value={sentence}
+                    onChange={handleSentenceChange}
+                    disabled={isSubmitted}
+                ></textarea>
+
+                {/* Score + Buttons */}
+                <div className="flex justify-between items-center mt-6">
+                    {score !== null && (
+                        <p className="text-xl font-bold">
+                            Score: {score.toFixed(1)}
+                        </p>
+                    )}
+
+                    <div className="flex gap-3">
                         {!isSubmitted ? (
                             <button
-                                onClick={handleSubmitSentence}
-                                className="px-6 py-3 bg-primary text-white rounded-lg hover:bg-secondary transition duration-200 ease-in-out font-medium shadow-md"
+                                className="px-6 py-3 bg-primary text-white rounded-lg"
                                 disabled={!sentence.trim()}
+                                onClick={handleSubmitSentence}
                             >
-                                Submit Sentence
+                                Submit
                             </button>
                         ) : (
-                            <button
-                                onClick={handleNextWord}
-                                className="px-6 py-3 bg-info text-white rounded-lg hover:bg-blue-700 transition duration-200 ease-in-out font-medium shadow-md"
-                            >
-                                Next Word
-                            </button>
+                            <>
+                                <button
+                                    className="px-6 py-3 bg-gray-500 text-white rounded-lg"
+                                    onClick={handleRetry}
+                                >
+                                    Retry
+                                </button>
+                                <button
+                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg"
+                                    onClick={handleNextWord}
+                                >
+                                    Next Word
+                                </button>
+                            </>
                         )}
                     </div>
                 </div>
+
+                {/* Feedback & Correction */}
+                {isSubmitted && (
+                    <div className="mt-6">
+                        <p className="font-semibold text-gray-800">
+                            Feedback: {feedback}
+                        </p>
+                        <p className="mt-2 text-gray-700">
+                            Corrected Sentence: {corrected}
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );
